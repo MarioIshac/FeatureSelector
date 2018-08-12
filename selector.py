@@ -1,12 +1,8 @@
 import math
 
-import sklearn as sk
 import numpy as np
 import pandas as pd
-import scipy as sp
 from random import sample
-
-from sklearn.linear_model import LinearRegression
 
 class FeatureSelector():
     def __init__(self, observed_data_frame, output_column_name, cutoff=None):
@@ -72,15 +68,11 @@ class ForwardSelectionFeatureSelector(WrapperFeatureSelector):
 
         for remaining_input_column_name in self.calc_remaining_input_column_names():
             test_input_column_names = self.selected_input_column_names + [remaining_input_column_name]
-            #print(f"Test Input Column Names: {test_input_column_names}")
 
             test_input_columns = self.observed_data_frame[test_input_column_names]
-            #print(f"Test Input Columns: {test_input_columns}")
-
-            #print(f"Train Indices: {train_indices}")
 
             train_input = test_input_columns.iloc[train_indices]
-            #print(f"Train Input: {train_input}")
+
             train_output = self.output_column.iloc[train_indices]
 
             model = self.model_constructor(train_input, train_output)
@@ -91,14 +83,12 @@ class ForwardSelectionFeatureSelector(WrapperFeatureSelector):
             validation_output = self.output_column.iloc[validation_indices]
 
             model_score = self.model_tester(model, validation_input, validation_output)
-            #print(f"Model Score: {model_score}")
 
             if model_score > highest_model_score:
                 highest_model_score = model_score
                 input_column_name_with_highest_model_score = remaining_input_column_name
 
         return input_column_name_with_highest_model_score
-
 
 class BackwardSelectionFeatureSelector(WrapperFeatureSelector):
     def __init__(self, observed_data_frame, output_column_name, model_constructor, model_tester, cutoff=None,
@@ -159,21 +149,23 @@ class ChiSquaredFeatureSelector(FeatureSelector):
     def select_next_feature(self):
         most_significant_chi_squared_stat = 0
 
+        output_classes = self.output_column.value_counts()
+
         for remaining_input_column_name in self.calc_remaining_input_column_names():
             input_column = self.observed_data_frame[remaining_input_column_name]
 
             input_classes = input_column.value_counts()
-            output_classes = self.output_column.value_counts()
 
             chi_square_test_stat = 0
 
-            for input_class, input_class_count in input_classes.keys():
+            for input_class, input_class_count in input_classes.items():
                 for output_class, output_class_count in output_classes.items():
                     expected_value = input_class_count * output_class_count / self.entry_count
 
-                    observed_input_mask = self.observed_data_frame[input_column] == input_class
-                    observed_output_mask = self.observed_data_frame[self.output_column] == output_class
-                    observed_mask = observed_input_mask and observed_output_mask
+                    observed_input_mask = input_column == input_class
+                    observed_output_mask = self.output_column == output_class
+
+                    observed_mask = observed_input_mask & observed_output_mask
 
                     observed_value = len(self.observed_data_frame.loc[observed_mask])
 
@@ -186,6 +178,54 @@ class ChiSquaredFeatureSelector(FeatureSelector):
 
         return most_significant_input_column_name
 
+
+class CovarianceFeatureSelector(FeatureSelector):
+    def __init__(self, observed_data_frame, output_column_name):
+        super().__init__(observed_data_frame, output_column_name)
+
+    def select_next_feature(self):
+        most_significant_covariance = 0
+
+        for remaining_input_column_name in self.calc_remaining_input_column_names():
+            input_column = self.observed_data_frame[remaining_input_column_name]
+
+            input_output_covariance = np.cov(input_column, self.output_column)
+
+            # Absolute Value of covariance determines how significant the relationship is between
+            # input and output
+            input_significance = np.abs(input_output_covariance)
+
+            if input_significance > most_significant_covariance:
+                most_significant_covariance = input_significance
+                most_significant_input_column_name = remaining_input_column_name
+
+        return most_significant_input_column_name
+
+
+class PearsonCorrelationCoefficientFeatureSelector(FeatureSelector):
+    def __init__(self, observed_data_frame, output_column_name):
+        super().__init__(observed_data_frame, output_column_name)
+
+        self.output_variance = np.var(self.output_column)
+
+    def select_next_feature(self):
+        most_significant_pcc = 0
+
+        for remaining_input_column_name in self.calc_remaining_input_column_names():
+            input_column = self.observed_data_frame[remaining_input_column_name]
+
+            input_output_covariance = np.cov(input_column, self.output_column)
+            input_variance = np.var(input_column)
+
+            # Absolute Value of covariance determines how significant the relationship is between
+            # input and output
+            pcc = input_output_covariance / (input_variance * self.output_variance)
+
+            if pcc > most_significant_pcc:
+                most_significant_pcc= pcc
+                most_significant_input_column_name = remaining_input_column_name
+
+        return most_significant_input_column_name
 
 class MutualInformationFeatureSelector(FeatureSelector):
     def __init__(self, observed_data_frame, output_column_name, cutoff=None):
@@ -262,16 +302,31 @@ if __name__ == "__main__":
     iris = load_iris()
 
     data1 = pd.DataFrame(data=np.c_[iris['data'], iris['target']], columns=iris['feature_names'] + ['target'])
+    data2 = pd.read_csv("test.csv")
 
-    from model_constructor import new_model_constructor
-    from model_tester import new_model_tester
+    print(data2.columns)
 
-    linear_model_constructor = new_model_constructor(LinearRegression, "fit")
-    rmse_model_tester = new_model_tester("predict", "r2")
+    import model_constructor as mc
+    import model_tester as mt
 
-    feature_selector = ForwardSelectionFeatureSelector(data1,
-                                                       "target",
-                                                       linear_model_constructor,
-                                                       rmse_model_tester)
+    import sklearn.metrics.regression
+
+    from sklearn.linear_model import LinearRegression
+    from model_tester import ScoreDirection
+
+    linear_model_constructor = mc.new_model_constructor(LinearRegression, "fit")
+    mae_model_tester = mt.new_model_tester("predict", sklearn.metrics.regression.median_absolute_error, ScoreDirection.LOWER)
+    ev_model_tester = mt.new_model_tester("predict", sklearn.metrics.regression.explained_variance_score, ScoreDirection.HIGHER)
+    r2_model_tester = mt.new_model_tester("predict", sklearn.metrics.regression.r2_score, ScoreDirection.HIGHER)
+
+    feature_selector = ForwardSelectionFeatureSelector(data2, "target", linear_model_constructor, mae_model_tester)
+    feature_selector.select_features()
+    print(feature_selector.selected_input_column_names)
+
+    feature_selector = ForwardSelectionFeatureSelector(data2, "target", linear_model_constructor, ev_model_tester)
+    feature_selector.select_features()
+    print(feature_selector.selected_input_column_names)
+
+    feature_selector = ForwardSelectionFeatureSelector(data2, "target", linear_model_constructor, r2_model_tester)
     feature_selector.select_features()
     print(feature_selector.selected_input_column_names)
