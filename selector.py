@@ -1,14 +1,21 @@
 import math
 
 import numpy as np
-import pandas as pd
 from random import sample
+
 
 class FeatureSelector():
     def __init__(self, observed_data_frame, output_column_name, cutoff=None):
+        """
+        :param observed_data_frame: A pandas DataFrame with input columns to consider and output column.
+        :param output_column_name: Name of output column in observed_data_frame.
+        :param cutoff: Number of features to select. If none, all features are selected. Regardless of
+                       number of features, selected features will be sorted by significance.
+        """
         self.observed_data_frame = observed_data_frame
         self.output_column_name = output_column_name
-        self.input_column_names = [column_name for column_name in observed_data_frame.columns if column_name != output_column_name]
+        self.input_column_names = [column_name for column_name in observed_data_frame.columns if
+                                   column_name != output_column_name]
 
         if not cutoff:
             cutoff = len(self.input_column_names)
@@ -20,35 +27,45 @@ class FeatureSelector():
         self.entry_count = len(observed_data_frame)
 
     def select_features(self):
+        """
+        Selects self.cutoff number of features, storing them in self.selected_input_column_names.
+        """
+
+        raise NotImplementedError("Instantiate one of subclasses in order to select features.")
+
+
+# TODO Generalize iteration over remaining input column names in all implementation of select_next_feature for
+# IterativeFeatureSelector. Currently the for loop is on the implementor's side rather than the interface's side.
+
+class IterativeFeatureSelector(FeatureSelector):
+    def __init__(self, observed_data_frame, output_column_name, cutoff=None):
+        super().__init__(observed_data_frame, output_column_name, cutoff)
+
+    def select_features(self):
         while len(self.selected_input_column_names) < self.cutoff:
             selected_input_column_name = self.select_next_feature()
 
             self.selected_input_column_names.append(selected_input_column_name)
 
     def select_next_feature(self):
-        raise NotImplementedError("Instantiate one of subclasses in order to select features.")
+        """
+        :return: Returns most significant feature. May consider currently selected features (in the
+                 case of wrapper method implementations), may not (in the case of filter method implementations).
+        """
+        raise NotImplementedError("Instantiate one of subclasses in order to select next feature.")
 
     def calc_remaining_input_column_names(self):
-        return [column_name for column_name in self.input_column_names if column_name not in self.selected_input_column_names]
+        """
+        :return: Column names that have not been selected so far. This is equivalent to the column
+                 names that are candidates for the next selection.
+        """
+        return [column_name for column_name in self.input_column_names if
+                column_name not in self.selected_input_column_names]
 
 
 class WrapperFeatureSelector(FeatureSelector):
     def __init__(self, observed_data_frame, output_column_name, model_constructor, model_tester, cutoff=None,
                  train_portion=0.8):
-        """
-        :param observed_data_frame: A pandas dataframe representing the data.
-        :param output_column_name: The name of the output column/feature in observed_data_frame.
-        :param model_constructor: A function accepting an array of input columns and the observed output column. Should
-                                  return a model that is fitted to the provided data.
-        :param model_tester: A function accepting the model returned by model_constructor, an array of input columns
-                             and the observed output column. Should return a score representing how well the provided model
-                             predicted the output, given the input columns.
-        :param cutoff: The number of features to be selected. Defaults to all features (i.e, no cutoff will be performed,
-                       rather the returned list will represent the ranks of each feature regarding its significance.
-        :param train_portion: The portion (in decimal) of an input column that should be used to train the model.
-                              The validation portion will be the remaining portion (1 - train_portion).
-                              Defaults to 0.8 (80%) if not specified.
-        """
         super().__init__(observed_data_frame, output_column_name, cutoff)
 
         self.model_constructor = model_constructor
@@ -56,9 +73,27 @@ class WrapperFeatureSelector(FeatureSelector):
         self.train_count = math.floor(self.entry_count * train_portion)
 
 
-class ForwardSelectionFeatureSelector(WrapperFeatureSelector):
-    def __init__(self, observed_data_frame, output_column_name, model_constructor, model_tester, cutoff=None, train_portion=0.8):
-        super().__init__(observed_data_frame, output_column_name, model_constructor, model_tester, cutoff, train_portion)
+# TODO Implement GeneticFeatureSelector
+
+class GeneticFeatureSelector(WrapperFeatureSelector):
+    def __init__(self, observed_data_frame, output_column_name, model_constructor, model_tester, cutoff=None,
+                 train_portion=0.8):
+        super().__init__(observed_data_frame, output_column_name, model_constructor, model_tester, cutoff,
+                         train_portion)
+
+    def select_features(self):
+        pass
+
+
+class ForwardSelectionFeatureSelector(WrapperFeatureSelector, IterativeFeatureSelector):
+    def __init__(self, observed_data_frame, output_column_name, model_constructor, model_tester, cutoff=None,
+                 train_portion=0.8):
+        # Super in this case in WrapperFeatureSelector, and we only invoke this super constructor
+        # because it is the only one that has a special procedure in itself (other super constructor
+        # only forwards arguments to FeatureSelector, that class is extended for the sole reason
+        # that it provides methods used for iteratively selecting features
+        super().__init__(observed_data_frame, output_column_name, model_constructor, model_tester, cutoff,
+                         train_portion)
 
     def select_next_feature(self):
         highest_model_score = 0
@@ -90,7 +125,8 @@ class ForwardSelectionFeatureSelector(WrapperFeatureSelector):
 
         return input_column_name_with_highest_model_score
 
-class BackwardSelectionFeatureSelector(WrapperFeatureSelector):
+
+class BackwardSelectionFeatureSelector(WrapperFeatureSelector, IterativeFeatureSelector):
     def __init__(self, observed_data_frame, output_column_name, model_constructor, model_tester, cutoff=None,
                  train_portion=0.8):
         super().__init__(observed_data_frame, output_column_name, model_constructor, model_tester, cutoff,
@@ -99,7 +135,8 @@ class BackwardSelectionFeatureSelector(WrapperFeatureSelector):
     def select_next_feature(self):
         highest_model_score_reduction = 0
 
-        pre_removal_columns_names = [column_name for column_name in self.observed_data_frame.columns if column_name not in self.selected_input_column_names]
+        pre_removal_columns_names = [column_name for column_name in self.observed_data_frame.columns if
+                                     column_name not in self.selected_input_column_names]
         pre_removal_columns = self.observed_data_frame[pre_removal_columns_names]
 
         input_indices = list(range(len(self.observed_data_frame)))
@@ -119,7 +156,8 @@ class BackwardSelectionFeatureSelector(WrapperFeatureSelector):
                                                     pre_removal_validation_output)
 
         for remaining_input_column_name in self.calc_remaining_input_column_names():
-            post_removal_column_names = [column_name for column_name in pre_removal_columns_names if column_name != remaining_input_column_name]
+            post_removal_column_names = [column_name for column_name in pre_removal_columns_names if
+                                         column_name != remaining_input_column_name]
             post_removal_columns = self.observed_data_frame[post_removal_column_names]
 
             post_removal_train_input = post_removal_columns.iloc[train_indices]
@@ -142,7 +180,7 @@ class BackwardSelectionFeatureSelector(WrapperFeatureSelector):
         return most_significant_input_column_name
 
 
-class ChiSquaredFeatureSelector(FeatureSelector):
+class ChiSquaredFeatureSelector(IterativeFeatureSelector):
     def __init__(self, observed_data_frame, output_column_name):
         super().__init__(observed_data_frame, output_column_name)
 
@@ -159,10 +197,11 @@ class ChiSquaredFeatureSelector(FeatureSelector):
             chi_square_test_stat = 0
 
             for input_class, input_class_count in input_classes.items():
+                observed_input_mask = input_column == input_class
+
                 for output_class, output_class_count in output_classes.items():
                     expected_value = input_class_count * output_class_count / self.entry_count
 
-                    observed_input_mask = input_column == input_class
                     observed_output_mask = self.output_column == output_class
 
                     observed_mask = observed_input_mask & observed_output_mask
@@ -179,7 +218,7 @@ class ChiSquaredFeatureSelector(FeatureSelector):
         return most_significant_input_column_name
 
 
-class CovarianceFeatureSelector(FeatureSelector):
+class CovarianceFeatureSelector(IterativeFeatureSelector):
     def __init__(self, observed_data_frame, output_column_name):
         super().__init__(observed_data_frame, output_column_name)
 
@@ -202,7 +241,7 @@ class CovarianceFeatureSelector(FeatureSelector):
         return most_significant_input_column_name
 
 
-class PearsonCorrelationCoefficientFeatureSelector(FeatureSelector):
+class PearsonCorrelationCoefficientFeatureSelector(IterativeFeatureSelector):
     def __init__(self, observed_data_frame, output_column_name):
         super().__init__(observed_data_frame, output_column_name)
 
@@ -222,111 +261,7 @@ class PearsonCorrelationCoefficientFeatureSelector(FeatureSelector):
             pcc = input_output_covariance / (input_variance * self.output_variance)
 
             if pcc > most_significant_pcc:
-                most_significant_pcc= pcc
+                most_significant_pcc = pcc
                 most_significant_input_column_name = remaining_input_column_name
 
         return most_significant_input_column_name
-
-class MutualInformationFeatureSelector(FeatureSelector):
-    def __init__(self, observed_data_frame, output_column_name, cutoff=None):
-        super().__init__(observed_data_frame, output_column_name, cutoff)
-
-    """@staticmethod
-    def calc_entropy(data_column):
-        column_entry_count = len(data_column)
-        column_classes_count = data_column.value_counts()
-
-        entropy = 0
-
-        for column_class, column_class_count in column_classes_count.items()
-            column_class_probability = column_class_count / column_entry_count
-
-            entropy_contribution = column_class_probability * np.log2(column_class_probability)
-            entropy -= entropy_contribution
-
-    @staticmethod
-    def calc_conditional_entropy(data_column, given_data_column):
-        column_entry_count = len(data_column)
-        given_column_entry_count = len(given_data_column)"""
-
-    def _calc_log(self, marginal_probability_of_input_class, marginal_probability_of_output_class,
-                  both_classes_joint_probability):
-        pass
-
-    def _calc_mutual_information_with_output_column(self, input_column):
-        input_column_classes_count = input_column.value_counts()
-        output_column_classes_count = self.output_column.value_counts()
-
-        mutual_information = 0
-
-        for input_column_class, input_column_class_count in input_column_classes_count.items():
-            for output_column_class, output_column_class_count in output_column_classes_count.items():
-                input_class_marginal_probability = 0
-                output_class_marginal_probability = 0
-                both_classes_joint_probability = 0
-
-                log = 0 if both_classes_joint_probability == 0 \
-                    else self._calc_log(input_class_marginal_probability, output_class_marginal_probability,
-                                        both_classes_joint_probability)
-
-                mutual_information_contribution = both_classes_joint_probability * log
-
-                mutual_information += mutual_information_contribution
-
-        return mutual_information
-
-    def select_features(self):
-        while len(self.selected_input_column_names) < self.cutoff:
-            most_significant_mutual_information = 0
-            most_significant_input_column_name = None
-
-            for remaining_input_column_name in self.calc_remaining_input_column_names():
-                remaining_input_column = self.observed_data_frame[remaining_input_column_name]
-
-                mutual_information = self._calc_mutual_information_with_output_column(remaining_input_column)
-
-                if mutual_information > most_significant_mutual_information:
-                    most_significant_mutual_information = mutual_information
-                    most_significant_input_column_name = remaining_input_column_name
-
-            if most_significant_input_column_name == None:
-                # All features have been chosen, otherwise any remaining feature would have a t-stat
-                # greater than 0 and thus this wouldn't have been None
-                break
-
-            self.selected_input_column_names.append(most_significant_input_column_name)
-
-if __name__ == "__main__":
-    from sklearn.datasets import load_iris
-
-    iris = load_iris()
-
-    data1 = pd.DataFrame(data=np.c_[iris['data'], iris['target']], columns=iris['feature_names'] + ['target'])
-    data2 = pd.read_csv("test.csv")
-
-    print(data2.columns)
-
-    import model_constructor as mc
-    import model_tester as mt
-
-    import sklearn.metrics.regression
-
-    from sklearn.linear_model import LinearRegression
-    from model_tester import ScoreDirection
-
-    linear_model_constructor = mc.new_model_constructor(LinearRegression, "fit")
-    mae_model_tester = mt.new_model_tester("predict", sklearn.metrics.regression.median_absolute_error, ScoreDirection.LOWER)
-    ev_model_tester = mt.new_model_tester("predict", sklearn.metrics.regression.explained_variance_score, ScoreDirection.HIGHER)
-    r2_model_tester = mt.new_model_tester("predict", sklearn.metrics.regression.r2_score, ScoreDirection.HIGHER)
-
-    feature_selector = ForwardSelectionFeatureSelector(data2, "target", linear_model_constructor, mae_model_tester)
-    feature_selector.select_features()
-    print(feature_selector.selected_input_column_names)
-
-    feature_selector = ForwardSelectionFeatureSelector(data2, "target", linear_model_constructor, ev_model_tester)
-    feature_selector.select_features()
-    print(feature_selector.selected_input_column_names)
-
-    feature_selector = ForwardSelectionFeatureSelector(data2, "target", linear_model_constructor, r2_model_tester)
-    feature_selector.select_features()
-    print(feature_selector.selected_input_column_names)

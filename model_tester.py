@@ -4,9 +4,14 @@ epsilon = 1e-8
 
 from enum import Enum
 
+
 class ScoreDirection(Enum):
+    """
+    Specifies which direction a score must go in order to improve itself.
+    """
     HIGHER = 0
     LOWER = 1
+
 
 def new_model_tester(model_predicter_name, scorer, score_direction):
     """
@@ -39,4 +44,5 @@ def new_model_tester(model_predicter_name, scorer, score_direction):
             model_score = 1 / (model_score + epsilon)
 
         return model_score
+
     return test_model
